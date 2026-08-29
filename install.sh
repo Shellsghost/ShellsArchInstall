@@ -1,28 +1,46 @@
-#Here is the fully updated `install.sh` script. It incorporates **LUKS encryption** across all root partitions (`p2` and `p3`) and the exFAT shared storage (`p4`), provisions **Bluetooth (`bluez`, `bluez-utils`)** and **Printing services (`cups`, `cups-pdf`)**, and maps your exact username (`anthony`) and passwords across both environments.
+### Hardware Profile Breakdown & Architectural Fixes
 
-### Updates Included
+Based on your Windows 11 system export, here are the critical motherboard and hardware specifics that directly impact your Linux deployment:
 
-#Full Drive LUKS Encryption:** Partitions `p2`, `p3`, and `p4` are formatted with `cryptsetup luksFormat` using your root passphrase (`^YHN6yhn&UJM7ujm`) and unlocked into mapper targets (`cryptarch`, `cryptblack`, `cryptshared`).
+* **Processor & iGPU:** AMD Ryzen 7 8700G with integrated **Radeon 780M Graphics** (Phoenix architecture).
+* **Motherboard:** MSI B650M PROJECT ZERO (AM5 Socket, AMD B650 Chipset, BIOS Version 1.B4 / July 2024).
+* **System Memory:** 64 GB DDR4/DDR5 RAM.
+* **Firmware Environment:** UEFI Mode, **Secure Boot is currently Off** (which is optimal for un-signed custom Linux kernels like `linux-hardened`).
 
+---
 
-* **System Credentials:**
-* **Username:** `anthony`
+### Key System Conflicts & Script Adjustments
 
-* **User Password:** `#HappyMeal123!@#`
+#### 1. Ryzen 8000 Series (Radeon 780M) Kernel & Microcode Handling
 
-* **Root / Encrypted Sudo Password:** `^YHN6yhn&UJM7ujm`
+The AMD Ryzen 7 8700G (Phoenix/GFX1103) requires modern `amd-ucode` and recent Linux firmware to properly initialize display outputs under Sway/Wayland without discrete GPU intervention.
 
-
-
-* **Bluetooth & Printing Stack:** Added `bluez`, `bluez-utils`, `blueman`, `cups`, and `cups-pdf` packages into `pacstrap` and enabled `bluetooth.service` and `cups.service` automatically on both OS builds.
-
-
-* **Bootloader Encryption Hooks:** Updated `mkinitcpio.conf` to load `encrypt` in the ramdisk hooks and configured `systemd-boot` entries (`10-arch.conf` & `20-blackarch.conf`) with `cryptdevice` parameters.
+* **Fix:** In Section 3 and Section 4, ensure `amd-ucode` is explicitly declared before the initramfs in the `systemd-boot` entries. Additionally, pass `amdgpu.sg_display=0` if you encounter stuttering on APU-driven displays.
 
 
 
-#```bash
-#. #!/usr/bin/env bash
+#### 2. Motherboard UEFI ESP Pathing & Bootloader Detection
+
+The MSI B650M BIOS expects the fallback EFI loader to exist at `\EFI\BOOT\BOOTX64.EFI` on the EFI System Partition (ESP) when registering NVRAM targets across dual NVMe drives.
+
+* **Fix:** In Section 5, run `bootctl install` and explicitly copy the `systemd-boot` binary to the default UEFI fallback path so the MSI BIOS detects the bootloader even if NVRAM boot entries are reset during BIOS updates.
+
+#### 3. Dual-Router (Double-NAT) Network Handshake Timing
+
+Because your Netgear Nighthawk is cascaded behind the ISP-provided router in Turkey, `systemd-networkd` / `NetworkManager` can experience a 5–10 second delay negotiating DHCP leases through double-NAT during boot.
+
+* **Fix:** In Section 7, update the `protonvpn-boot.service` unit to include `Restart=on-failure` and `RestartSec=10s` so the VPN service doesn't fail permanently if the network stack takes extra time to acquire a default gateway.
+
+
+
+---
+
+### Updated & Fully Synchronized `install.sh`
+
+Below is the complete script adjusted specifically for the **MSI B650M PROJECT ZERO + Ryzen 7 8700G** hardware configuration:
+
+```bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # ==========================================
@@ -66,8 +84,8 @@ method=auto
 EOF
 
 iwctl station wlan0 connect "${WIFI_SSID}" --passphrase "${WIFI_PASSWORD}" || true
-sleep 4
-ping -c 3 archlinux.org > /dev/null && echo "✔ Local Network Verification Successful"
+sleep 5
+ping -c 3 archlinux.org > /dev/null && echo "✔ Network Verification Successful"
 
 # ==========================================
 # 🗺️ AUTOMATED STORAGE SLICING & LUKS ENCRYPTION
@@ -98,9 +116,9 @@ mkfs.ext4 -F /dev/mapper/cryptblack
 mkfs.exfat /dev/mapper/cryptshared
 
 # ==========================================
-# 🍏 PARTITION A: BASELINE ARCH + SWAY (Pure AMD Stack + BT/Printing)
+# 🍏 PARTITION A: BASELINE ARCH + SWAY (Ryzen 8700G APU / Radeon 780M)
 # ==========================================
-echo "=== [3/8] Bootstrapping Partition A: Arch Linux (Standard Kernel + Pure AMD + LUKS) ==="
+echo "=== [3/8] Bootstrapping Partition A: Arch Linux (Standard Kernel + AMD APU) ==="
 mount /dev/mapper/cryptarch /mnt
 mkdir -p /mnt/efi && mount "${TARGET_DISK}p1" /mnt/efi
 mkdir -p /mnt/mnt/SharedData
@@ -132,9 +150,9 @@ EOF
 umount -R /mnt
 
 # ==========================================
-# 🛡️ PARTITION B: BLACKARCH HARDENED (Dedicated NVIDIA Stack + BT/Printing)
+# 🛡️ PARTITION B: BLACKARCH HARDENED (Dedicated SOC Environment)
 # ==========================================
-echo "=== [4/8] Bootstrapping Partition B: BlackArch (Hardened Kernel + NVIDIA + LUKS) ==="
+echo "=== [4/8] Bootstrapping Partition B: BlackArch (Hardened Kernel + Tools) ==="
 mount /dev/mapper/cryptblack /mnt
 mkdir -p /mnt/efi && mount "${TARGET_DISK}p1" /mnt/efi
 mkdir -p /mnt/mnt/SharedData
@@ -163,9 +181,13 @@ useradd -m -G wheel,lp,scanner -s /bin/bash ${SYSTEM_USER}
 echo "${SYSTEM_USER}:${USER_PASS}" | chpasswd
 echo "${SYSTEM_USER} ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers.d/${SYSTEM_USER}
 
-curl -O https://blackarch.org
+curl -O https://blackarch.org/strap.sh
 chmod +x strap.sh && ./strap.sh
 EOF
+
+# Copy BlackArch Hardened Kernel and Initramfs to EFI partition before unmounting
+cp /mnt/boot/vmlinuz-linux-hardened /mnt/efi/
+cp /mnt/boot/initramfs-linux-hardened.img /mnt/efi/
 umount -R /mnt
 
 # ==========================================
@@ -175,10 +197,26 @@ echo "=== [5/8] Generating systemd-boot & Registering NVRAM Entries ==="
 mount /dev/mapper/cryptarch /mnt
 mkdir -p /mnt/efi && mount "${TARGET_DISK}p1" /mnt/efi
 
-arch-chroot /mnt bootctl install --esp-path=/efi
-arch-chroot /mnt efibootmgr --create --disk "${TARGET_DISK}" --part 1 --label "Linux Boot Manager" --loader "\EFI\systemd\systemd-bootx64.efi" || true
+# Copy Standard Kernel and Initramfs to EFI partition
+cp /mnt/boot/vmlinuz-linux /mnt/efi/
+cp /mnt/boot/initramfs-linux.img /mnt/efi/
+cp /mnt/boot/amd-ucode.img /mnt/efi/
 
-# Config for Partition A (Arch Linux)
+arch-chroot /mnt bootctl install --esp-path=/efi
+
+# Fallback EFI binary for MSI B650 Board Detection
+mkdir -p /mnt/efi/EFI/BOOT
+cp /mnt/efi/EFI/systemd/systemd-bootx64.efi /mnt/efi/EFI/BOOT/BOOTX64.EFI
+
+# Configure systemd-boot Loader Defaults
+cat <<EOF > /mnt/efi/loader/loader.conf
+default 10-arch.conf
+timeout 10
+console-mode max
+editor no
+EOF
+
+# Entry 1: Arch Linux (Standard Kernel + Sway APU)
 cat <<EOF > /mnt/efi/loader/entries/10-arch.conf
 title   Arch Linux (Standard + Sway)
 linux   /vmlinuz-linux
@@ -187,22 +225,24 @@ initrd  /initramfs-linux.img
 options cryptdevice=${TARGET_DISK}p2:cryptarch root=/dev/mapper/cryptarch rw amdgpu.ppfeaturemask=0xffffffff
 EOF
 
-# Config for Partition B (BlackArch)
+# Entry 2: BlackArch Hardened SOC Workstation
 cat <<EOF > /mnt/efi/loader/entries/20-blackarch.conf
 title   BlackArch (Hardened Security Kernel)
 linux   /vmlinuz-linux-hardened
 initrd  /amd-ucode.img
 initrd  /initramfs-linux-hardened.img
-options cryptdevice=${TARGET_DISK}p3:cryptblack root=/dev/mapper/cryptblack rw nvidia_drm.modeset=1
+options cryptdevice=${TARGET_DISK}p3:cryptblack root=/dev/mapper/cryptblack rw
 EOF
+
 umount -R /mnt
 
 # ==========================================
 # 🔄 AUTOMATED BACKGROUND SYSTEM UPDATES
 # ==========================================
 echo "=== [6/8] Injecting Automated Maintenance Upkeep Scripts ==="
-mount /dev/mapper/cryptarch /mnt
-cat <<EOF > /mnt/etc/systemd/system/auto-update.service
+
+write_auto_update() {
+    cat <<EOF > "$1/etc/systemd/system/auto-update.service"
 [Unit]
 Description=Automated System Package Sync Lifecycle
 After=network-online.target
@@ -213,7 +253,7 @@ Type=oneshot
 ExecStart=/usr/bin/pacman -Syu --noconfirm
 EOF
 
-cat <<EOF > /mnt/etc/systemd/system/auto-update.timer
+    cat <<EOF > "$1/etc/systemd/system/auto-update.timer"
 [Unit]
 Description=Run automated system updates daily
 
@@ -224,11 +264,15 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+}
+
+mount /dev/mapper/cryptarch /mnt
+write_auto_update /mnt
 arch-chroot /mnt systemctl enable auto-update.timer
 umount -R /mnt
 
 mount /dev/mapper/cryptblack /mnt
-cp /mnt/etc/systemd/system/auto-update.* /mnt/etc/systemd/system/ 2>/dev/null || true
+write_auto_update /mnt
 arch-chroot /mnt systemctl enable auto-update.timer
 umount -R /mnt
 
@@ -244,7 +288,7 @@ cat <<EOF > /mnt/home/${SYSTEM_USER}/desktop-apps-setup.sh
 set -e
 echo "Building package infrastructure tools..."
 cd /tmp
-git clone https://archlinux.org && cd yay-bin && makepkg -si --noconfirm
+git clone https://aur.archlinux.org/yay-bin.git && cd yay-bin && makepkg -si --noconfirm
 yay -S zen-browser-bin proton-vpn-gnome-desktop --noconfirm
 
 expect -c '
@@ -261,6 +305,8 @@ sudo tee /etc/systemd/system/protonvpn-boot.service > /dev/null <<SERVICEEOF
 Description=ProtonVPN Secure Core Automated Startup Connection
 After=network-online.target NetworkManager.service
 Wants=network-online.target
+Restart=on-failure
+RestartSec=10s
 
 [Service]
 Type=oneshot
@@ -303,7 +349,7 @@ cat <<EOF > /mnt/home/${SYSTEM_USER}/hardened-apps-setup.sh
 set -e
 echo "Building environment hooks..."
 cd /tmp
-git clone https://archlinux.org && cd yay-bin && makepkg -si --noconfirm
+git clone https://aur.archlinux.org/yay-bin.git && cd yay-bin && makepkg -si --noconfirm
 sudo pacman -S --noconfirm proton-vpn-cli
 yay -S zen-browser-bin --noconfirm
 
@@ -321,6 +367,8 @@ sudo tee /etc/systemd/system/protonvpn-boot.service > /dev/null <<SERVICEEOF
 Description=ProtonVPN Secure Core Hardened Boot Connection
 After=network-online.target NetworkManager.service
 Wants=network-online.target
+Restart=on-failure
+RestartSec=10s
 
 [Service]
 Type=oneshot
