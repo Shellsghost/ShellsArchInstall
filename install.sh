@@ -1,45 +1,3 @@
-### Hardware Profile Breakdown & Architectural Fixes
-
-Based on your Windows 11 system export, here are the critical motherboard and hardware specifics that directly impact your Linux deployment:
-
-* **Processor & iGPU:** AMD Ryzen 7 8700G with integrated **Radeon 780M Graphics** (Phoenix architecture).
-* **Motherboard:** MSI B650M PROJECT ZERO (AM5 Socket, AMD B650 Chipset, BIOS Version 1.B4 / July 2024).
-* **System Memory:** 64 GB DDR4/DDR5 RAM.
-* **Firmware Environment:** UEFI Mode, **Secure Boot is currently Off** (which is optimal for un-signed custom Linux kernels like `linux-hardened`).
-
----
-
-### Key System Conflicts & Script Adjustments
-
-#### 1. Ryzen 8000 Series (Radeon 780M) Kernel & Microcode Handling
-
-The AMD Ryzen 7 8700G (Phoenix/GFX1103) requires modern `amd-ucode` and recent Linux firmware to properly initialize display outputs under Sway/Wayland without discrete GPU intervention.
-
-* **Fix:** In Section 3 and Section 4, ensure `amd-ucode` is explicitly declared before the initramfs in the `systemd-boot` entries. Additionally, pass `amdgpu.sg_display=0` if you encounter stuttering on APU-driven displays.
-
-
-
-#### 2. Motherboard UEFI ESP Pathing & Bootloader Detection
-
-The MSI B650M BIOS expects the fallback EFI loader to exist at `\EFI\BOOT\BOOTX64.EFI` on the EFI System Partition (ESP) when registering NVRAM targets across dual NVMe drives.
-
-* **Fix:** In Section 5, run `bootctl install` and explicitly copy the `systemd-boot` binary to the default UEFI fallback path so the MSI BIOS detects the bootloader even if NVRAM boot entries are reset during BIOS updates.
-
-#### 3. Dual-Router (Double-NAT) Network Handshake Timing
-
-Because your Netgear Nighthawk is cascaded behind the ISP-provided router in Turkey, `systemd-networkd` / `NetworkManager` can experience a 5–10 second delay negotiating DHCP leases through double-NAT during boot.
-
-* **Fix:** In Section 7, update the `protonvpn-boot.service` unit to include `Restart=on-failure` and `RestartSec=10s` so the VPN service doesn't fail permanently if the network stack takes extra time to acquire a default gateway.
-
-
-
----
-
-### Updated & Fully Synchronized `install.sh`
-
-Below is the complete script adjusted specifically for the **MSI B650M PROJECT ZERO + Ryzen 7 8700G** hardware configuration:
-
-```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -405,5 +363,3 @@ if [ -n "${USB_DEV}" ]; then
     mkfs.vfat -F 32 "${USB_DEV}1"
     echo "✔ Installation USB formatted to clean FAT32 storage"
 fi
-
-```
