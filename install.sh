@@ -1,8 +1,8 @@
-Here is the fully updated `install.sh` script. It incorporates **LUKS encryption** across all root partitions (`p2` and `p3`) and the exFAT shared storage (`p4`), provisions **Bluetooth (`bluez`, `bluez-utils`)** and **Printing services (`cups`, `cups-pdf`)**, and maps your exact username (`anthony`) and passwords across both environments.
+#Here is the fully updated `install.sh` script. It incorporates **LUKS encryption** across all root partitions (`p2` and `p3`) and the exFAT shared storage (`p4`), provisions **Bluetooth (`bluez`, `bluez-utils`)** and **Printing services (`cups`, `cups-pdf`)**, and maps your exact username (`anthony`) and passwords across both environments.
 
 ### Updates Included
 
-* **Full Drive LUKS Encryption:** Partitions `p2`, `p3`, and `p4` are formatted with `cryptsetup luksFormat` using your root passphrase (`^YHN6yhn&UJM7ujm`) and unlocked into mapper targets (`cryptarch`, `cryptblack`, `cryptshared`).
+#Full Drive LUKS Encryption:** Partitions `p2`, `p3`, and `p4` are formatted with `cryptsetup luksFormat` using your root passphrase (`^YHN6yhn&UJM7ujm`) and unlocked into mapper targets (`cryptarch`, `cryptblack`, `cryptshared`).
 
 
 * **System Credentials:**
@@ -21,8 +21,8 @@ Here is the fully updated `install.sh` script. It incorporates **LUKS encryption
 
 
 
-```bash
-#!/usr/bin/env bash
+#```bash
+#. #!/usr/bin/env bash
 set -euo pipefail
 
 # ==========================================
