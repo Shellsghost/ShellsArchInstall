@@ -8,6 +8,9 @@ TARGET_DISK="/dev/nvme1n1"
 WIFI_SSID="Eorzea"
 WIFI_PASSWORD="#Barbi30scar"
 
+PROTON_USER="Shellsghost"
+PROTON_PASS="ES^vGh7JN56)qx-"
+
 echo "=== [1/8] Initializing Hardware, Drive Targets, and Wi-Fi Handshakes ==="
 
 mkdir -p /tmp/net_config
@@ -43,7 +46,6 @@ ping -c 3 archlinux.org > /dev/null && echo "✔ Local Network Verification Succ
 echo "=== [2/8] Slicing Drive and Carving out Shared exFAT Storage ==="
 sgdisk -Z "${TARGET_DISK}"
 sgdisk -n 1:0:+1G -t 1:ef00 -c 1:"SHARED_ESP" "${TARGET_DISK}"
-# Allocating 50% for Arch, 35% for BlackArch, remaining ~15% for cross-OS shared storage
 sgdisk -n 2:0:+50%FREE -t 2:8300 -c 2:"ARCH_SWAY" "${TARGET_DISK}"
 sgdisk -n 3:0:+70%FREE -t 3:8300 -c 3:"BLACKARCH_HARDENED" "${TARGET_DISK}"
 sgdisk -n 4:0:+100%FREE -t 4:0700 -c 4:"SHARED_BACKUPS" "${TARGET_DISK}"
@@ -61,10 +63,9 @@ mount "${TARGET_DISK}p2" /mnt
 mkdir -p /mnt/efi && mount "${TARGET_DISK}p1" /mnt/efi
 mkdir -p /mnt/mnt/SharedData
 
-# Install core, wayland components, and filesystem drivers for exFAT mapping
-pacstrap -K /mnt base linux linux-headers linux-firmware amd-ucode networkmanager exfatprogs sudo mesa sway git base-devel
+# Installs basic tools, Wayland desktop ecosystem, AMD/NVIDIA dual drivers, and nvidia-prime
+pacstrap -K /mnt base linux linux-headers linux-firmware amd-ucode networkmanager exfatprogs sudo mesa sway git base-devel expect nvidia nvidia-utils nvidia-prime
 
-# Save fstab mappings including the shared data disk
 genfstab -U /mnt >> /mnt/etc/fstab
 SHARED_UUID=$(blkid -s UUID -o value "${TARGET_DISK}p4")
 echo "UUID=${SHARED_UUID} /mnt/SharedData exfat defaults,uid=1000,gid=1000,nofail 0 0" >> /mnt/etc/fstab
@@ -89,7 +90,8 @@ mount "${TARGET_DISK}p3" /mnt
 mkdir -p /mnt/efi && mount "${TARGET_DISK}p1" /mnt/efi
 mkdir -p /mnt/mnt/SharedData
 
-pacstrap -K /mnt base linux-hardened linux-hardened-headers linux-firmware amd-ucode networkmanager exfatprogs sudo mesa git base-devel
+pacstrap -K /mnt base linux-hardened linux-hardened-headers linux-firmware amd-ucode networkmanager exfatprogs sudo mesa git base-devel expect nvidia-hardened nvidia-utils nvidia-prime || \
+pacstrap -K /mnt base linux-hardened linux-hardened-headers linux-firmware amd-ucode networkmanager exfatprogs sudo mesa git base-devel expect nvidia-dkms nvidia-utils nvidia-prime
 
 genfstab -U /mnt >> /mnt/etc/fstab
 echo "UUID=${SHARED_UUID} /mnt/SharedData exfat defaults,uid=1000,gid=1000,nofail 0 0" >> /mnt/etc/fstab
@@ -120,6 +122,7 @@ arch-chroot /mnt bootctl install --esp-path=/efi
 ARCH_UUID=$(blkid -s UUID -o value "${TARGET_DISK}p2")
 BLACK_UUID=$(blkid -s UUID -o value "${TARGET_DISK}p3")
 
+# Force early modesetting for integrated AMD graphics rendering while loading NVIDIA modules cleanly
 cat <<EOF > /mnt/efi/loader/entries/10-arch.conf
 title   Arch Linux (Standard + Sway)
 linux   /vmlinuz-linux
@@ -172,11 +175,11 @@ done
 # ==========================================
 # 🌐 INITIAL FIRST-BOOT APPLICATION HOOKS
 # ==========================================
-echo "=== [7/8] Generating First-Boot Native Core Deployers with VPN Systemd Automation ==="
+echo "=== [7/8] Generating First-Boot Native Core Deployers with Automated Secure Core Hooks ==="
 
-# --- Partition 2 Setup (Arch Sway) ---
+# --- Partition 2 Setup (Arch Sway Environment) ---
 mount "${TARGET_DISK}p2" /mnt
-cat <<'EOF' > /mnt/home/starlight/desktop-apps-setup.sh
+cat <<EOF > /mnt/home/starlight/desktop-apps-setup.sh
 #!/usr/bin/env bash
 set -e
 echo "Building package infrastructure tools..."
@@ -184,10 +187,15 @@ cd /tmp
 git clone https://archlinux.org && cd yay-bin && makepkg -si --noconfirm
 yay -S zen-browser-bin proton-vpn-gnome-desktop --noconfirm
 
-# Inject automation shell aliases
+expect -c '
+spawn protonvpn-cli login "${PROTON_USER}"
+expect "Enter your Proton VPN password:"
+send "${PROTON_PASS}\r"
+expect eof
+'
+
 echo "alias vpnup='sudo protonvpn-cli c --sc'" >> /home/starlight/.bashrc
 
-# Set up automated systemd startup profiles for ProtonVPN Secure Core
 sudo tee /etc/systemd/system/protonvpn-boot.service > /dev/null <<SERVICEEOF
 [Unit]
 Description=ProtonVPN Secure Core Automated Startup Connection
@@ -205,28 +213,27 @@ WantedBy=multi-user.target
 SERVICEEOF
 
 sudo systemctl enable protonvpn-boot.service
-
-echo "✔ Arch Desktop Apps & Secure Core Automation configured!"
-echo "NOTE: Remember to run 'protonvpn-cli login <username>' first upon booting into your desktop."
+echo "✔ Arch Desktop & Secure Core automation successfully linked!"
 EOF
 
-# Inject basic Sway custom indicator wrapper config into User home directory
+# Inject baseline workspace allocation and custom hardware wrappers into Sway configuration profile
 mkdir -p /mnt/home/starlight/.config/sway
 cat <<'SWAYEOF' > /mnt/home/starlight/.config/sway/config
-# Mapped auto-launch rules for Zen Browser
+# Mapped default environment overrides forcing hardware compositor rendering strictly onto AMD iGPU
+# while letting the card dynamically load hybrid pass-through layers via prime-run layer calls later.
+exec WLR_DRM_DEVICES=/dev/dri/by-path/pci-0000:0c:00.0-card sway
+
 assign [app_id="zen"] workspace number 1
 exec zen-browser
 
-# Custom baseline keybinds
 modifier Mod4
 bindsym $modifier+Return exec foot
 bindsym $modifier+q kill
 bindsym $modifier+d exec menu
 
-# Status Bar mapping displaying active VPN routing states
 bar {
     position top
-    status_command while true; do echo "VPN Status: $(protonvpn-cli s | grep 'Status:' | awk '{print $2}') | $(date +'%Y-%m-%d %H:%M')"; sleep 5; done
+    status_command while true; do echo "VPN: $(protonvpn-cli s | grep 'Status:' | awk '{print $2}') | $(date +'%H:%M')"; sleep 5; done
 }
 SWAYEOF
 
@@ -234,9 +241,10 @@ chmod +x /mnt/home/starlight/desktop-apps-setup.sh
 chown -R 1000:1000 /mnt/home/starlight/
 umount -R /mnt
 
-# --- Partition 3 Setup (BlackArch Hardened CLI) ---
+
+# --- Partition 3 Setup (BlackArch Hardened Environment) ---
 mount "${TARGET_DISK}p3" /mnt
-cat <<'EOF' > /mnt/home/starlight/hardened-apps-setup.sh
+cat <<EOF > /mnt/home/starlight/hardened-apps-setup.sh
 #!/usr/bin/env bash
 set -e
 echo "Building environment hooks..."
@@ -244,6 +252,13 @@ cd /tmp
 git clone https://archlinux.org && cd yay-bin && makepkg -si --noconfirm
 sudo pacman -S --noconfirm proton-vpn-cli
 yay -S zen-browser-bin --noconfirm
+
+expect -c '
+spawn sudo protonvpn-cli login "${PROTON_USER}"
+expect "Enter your Proton VPN password:"
+send "${PROTON_PASS}\r"
+expect eof
+'
 
 echo "alias vpnup='sudo protonvpn-cli c --sc'" >> /home/starlight/.bashrc
 
@@ -264,9 +279,7 @@ WantedBy=multi-user.target
 SERVICEEOF
 
 sudo systemctl enable protonvpn-boot.service
-
-echo "✔ Hardened Security Environment Setup Completed Successfully!"
-echo "NOTE: Remember to run 'sudo protonvpn-cli login <username>' first upon booting."
+echo "✔ BlackArch Hardened environment successfully locked and configured!"
 EOF
 
 chmod +x /mnt/home/starlight/hardened-apps-setup.sh
@@ -286,4 +299,3 @@ if [ -n "${USB_DEV}" ]; then
     echo "✔ Installation USB formatted to clean FAT32 storage"
 fi
 
-echo "🎉 DEPLOYMENT COMPLETE! REBOOT YOUR COMPUTER NOW."
